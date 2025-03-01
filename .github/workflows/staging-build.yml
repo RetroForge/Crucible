@@ -46,3 +46,4 @@ jobs:
           With this release you can test ahead of time the next Crucible release candidate
         files: |
           build/distributions/*
+          java9args.txt
