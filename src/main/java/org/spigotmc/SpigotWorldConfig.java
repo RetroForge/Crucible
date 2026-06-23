@@ -23,6 +23,7 @@ public class SpigotWorldConfig {
     public double itemMerge;
     public double expMerge;
     public int viewDistance;
+    public int tickDistance;
     public byte mobSpawnRange;
     public int animalActivationRange = 32;
     public int monsterActivationRange = 32;
@@ -145,6 +146,11 @@ public class SpigotWorldConfig {
     private void viewDistance() {
         viewDistance = getInt("view-distance", Bukkit.getViewDistance());
         log("View Distance: " + viewDistance);
+    }
+
+    private void tickDistance() {
+        tickDistance = getInt("tick-distance", Bukkit.getViewDistance());
+        log("Tick Distance: " + tickDistance);
     }
 
     private void mobSpawnRange() {
