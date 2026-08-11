@@ -2,6 +2,7 @@ package org.bukkit.craftbukkit.v1_7_R4.command;
 
 import cpw.mods.fml.common.FMLCommonHandler;
 import net.minecraft.command.ICommandSender;
+import net.minecraft.network.rcon.RConConsoleSource;
 import org.bukkit.Server;
 import org.bukkit.command.*;
 import org.bukkit.craftbukkit.v1_7_R4.entity.CraftPlayer;
@@ -39,10 +40,17 @@ public class CraftSimpleCommandMap extends SimpleCommandMap {
             // Cauldron start - if command is a mod command, check permissions and route through vanilla
             if (target instanceof ModCustomCommand) {
                 if (!target.testPermission(sender)) return true;
+                // Crucible - the vanilla handler only knows bare names, so drop the modid: namespace
+                if (sentCommandLabel.indexOf(':') >= 0) {
+                    commandLine = target.getName() + commandLine.substring(args[0].length());
+                }
                 if (sender instanceof ConsoleCommandSender) {
                     FMLCommonHandler.instance().getMinecraftServerInstance().getCommandManager().executeCommand(this.vanillaConsoleSender, commandLine);
-                } else
+                } else if (sender instanceof RemoteConsoleCommandSender) {
+                    FMLCommonHandler.instance().getMinecraftServerInstance().getCommandManager().executeCommand(RConConsoleSource.instance, commandLine);
+                } else if (sender instanceof CraftPlayer) {
                     FMLCommonHandler.instance().getMinecraftServerInstance().getCommandManager().executeCommand(((CraftPlayer) sender).getHandle(), commandLine);
+                }
             } else {
                 // Cauldron end
                 // Note: we don't return the result of target.execute as thats success / failure, we return handled (true) or not handled (false)
