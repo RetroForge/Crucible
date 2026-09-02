@@ -2,6 +2,7 @@ import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.bundling.Zip
 import org.gradle.api.publish.maven.MavenPublication
 import io.github.cruciblemc.forgegradle.tasks.DelayedJar
+import org.gradle.api.artifacts.ModuleVersionIdentifier
 import java.io.ByteArrayOutputStream
 
 plugins {
@@ -86,6 +87,12 @@ version = if (gitInfo("branch") != "master") {
 val libraries by configurations.creating {
     isCanBeConsumed = false; isCanBeResolved = true;
 }
+
+// Libraries kept out of the jar's Class-Path, mapped to the lowest Java major that can load them.
+// A jar the running JVM cannot read is not inert on the Class-Path, and the JVM reads that line
+// before any of our code runs, so the only way to keep it away from an old JVM is to never name it
+// there; DeferredLibraries attaches these at runtime once the Java version is known.
+val deferredLibraries = mapOf("org.openjdk.nashorn:nashorn-core" to 11)
 
 configurations["implementation"].extendsFrom(libraries)
 
@@ -193,7 +200,8 @@ tasks.named<Jar>("jar").configure {
                 "TweakClass" to "cpw.mods.fml.common.launcher.FMLTweaker",
                 "Main-Class" to "cpw.mods.fml.relauncher.ServerLaunchWrapper",
                 "Class-Path" to generateClasspath(),
-                "Crucible-Libs" to generateMavenLibs()
+                "Crucible-Libs" to generateMavenLibs(),
+                "Crucible-Deferred-Libs" to generateDeferredLibs()
             )
         )
     }
@@ -220,7 +228,8 @@ tasks.named<DelayedJar>("packageServer").configure {
                     "TweakClass" to "cpw.mods.fml.common.launcher.FMLTweaker",
                     "Main-Class" to "cpw.mods.fml.relauncher.ServerLaunchWrapper",
                     "Class-Path" to generateClasspath(),
-                    "Crucible-Libs" to generateMavenLibs()
+                    "Crucible-Libs" to generateMavenLibs(),
+                    "Crucible-Deferred-Libs" to generateDeferredLibs()
                 )
             )
         }
@@ -233,14 +242,19 @@ tasks.register<Zip>("packageLibraries") {
 
     outputs.upToDateWhen { false }
 
-    from(configurations.named("libraries").get().resolvedConfiguration.resolvedArtifacts.map { art ->
+    // Laid out exactly like generateClasspath(), because that is what reads it back: the server
+    // jar's own Class-Path resolves every library at
+    // libraries/<group as path>/<name>/<version>/<name>-<version>.jar, relative to the server
+    // directory. A flat archive resolves none of them, so the offline case this task exists to
+    // cover ends with the server on an empty classpath, dying on the first class a library owns.
+    configurations["libraries"].resolvedConfiguration.resolvedArtifacts.forEach { art ->
         val id = art.moduleVersion.id
-        val intoPath = "${id.group.replace('.', '/')}/${id.name}/${id.version}/"
-        zipTree(art.file).matching { }.let { copySpec ->
-            //copySpec.into(intoPath)
+        from(art.file) {
+            into("libraries/${id.group.replace('.', '/')}/${id.name}/${id.version}")
+            // A published file name can carry a classifier; the Class-Path entry never does.
+            rename { "${id.name}-${id.version}.jar" }
         }
-        art.file
-    })
+    }
 
     group = "crucible"
     description = "Package all necessary libraries to run Crucible, in case the server cannot download them at runtime"
@@ -292,14 +306,29 @@ fun runGit(vararg args: String): String {
     return stdout.toString().trim()
 }
 
+fun isDeferred(id: ModuleVersionIdentifier): Boolean =
+    deferredLibraries.containsKey("${id.group}:${id.name}")
+
 fun generateClasspath(): String =
-    configurations["libraries"].resolvedConfiguration.resolvedArtifacts.joinToString(" ") { art ->
-        val id = art.moduleVersion.id
-        "libraries/${id.group.replace('.', '/')}/${id.name}/${id.version}/${id.name}-${id.version}.jar"
-    }
+    configurations["libraries"].resolvedConfiguration.resolvedArtifacts
+        .filterNot { isDeferred(it.moduleVersion.id) }
+        .joinToString(" ") { art ->
+            val id = art.moduleVersion.id
+            "libraries/${id.group.replace('.', '/')}/${id.name}/${id.version}/${id.name}-${id.version}.jar"
+        }
 
 fun generateMavenLibs(): String =
     configurations["libraries"].resolvedConfiguration.resolvedArtifacts.joinToString(" ") { art ->
         val id = art.moduleVersion.id
         "${id.group}:${id.name}:${id.version}"
     }
+
+// Every deferred library is still downloaded and verified like the rest - only the Class-Path skips
+// it - so the same install serves both an old and a new JVM without fetching anything on the swap.
+fun generateDeferredLibs(): String =
+    configurations["libraries"].resolvedConfiguration.resolvedArtifacts
+        .filter { isDeferred(it.moduleVersion.id) }
+        .joinToString(" ") { art ->
+            val id = art.moduleVersion.id
+            "${id.group}:${id.name}:${id.version}:${deferredLibraries["${id.group}:${id.name}"]}"
+        }
